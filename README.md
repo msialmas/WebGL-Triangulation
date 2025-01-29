@@ -1,6 +1,6 @@
 # WebGL-Triangulation
-WebGL Triangulation
-WebGL Constrained Delaunay Triangulation
+
+Constrained Delaunay Triangulation using WebGL
 
 <img width="944" alt="Screenshot 2025-01-29 195247" src="https://github.com/user-attachments/assets/45b0d5fa-eb9b-41c8-a695-36defbcd3c6a" />
 
