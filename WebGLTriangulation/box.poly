@@ -1,0 +1,42 @@
+#  box.poly
+#
+#  Declare that there are 8 vertices in 2D, no attributes, one boundary marker.
+#
+  8 2 0 1
+#
+#  The outer box has these vertices:
+#
+  1   0 0   0
+  2   0 3   0
+  3   3 0   0
+  4   3 3   33     # A special marker for this vertex.
+#
+#  The inner square has these vertices:
+#
+  5   1 1   0
+  6   1 2   0
+  7   2 1   0
+  8   2 2   0
+#
+#  Declare 5 segments with boundary markers.
+#
+  5 1
+#
+#  List the segments.
+#
+  1   1 2   5      # Left side of outer box.
+#
+# Square hole has these segments:
+#
+  2   5 7   0
+  3   7 8   0
+  4   8 6   10
+  5   6 5   0
+#
+#  Declare the number of holes.
+#
+  1
+#
+#  Specify the hole.
+#
+  1   1.5 1.5

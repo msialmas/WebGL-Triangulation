@@ -1,0 +1,503 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Triangle.Web</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" type="text/css" href="Libs/style.css" />
+    <script type="text/javascript" src="Libs/Utils.js"></script>
+    <script type="text/javascript" src="Libs/webgl-debug.js"></script>
+    <script type="text/javascript" src="Libs/Triangulation.js"></script>
+    <script src="Libs/cuon-utils.js"></script>
+    <script src="Libs/cuon-matrix.js"></script>
+
+    <script id="shader-vs" type="x-shader/x-vertex">
+            attribute vec3 a_Position;
+            uniform vec4 translation;
+            uniform mat4 u_xformMatrix;
+            attribute vec4 a_Color;
+            uniform vec4 bounds;
+            varying vec4 v_Color;
+            uniform float u_ZValue;
+            uniform float xMin;
+            uniform float xMax;
+            uniform float yMin;
+            uniform float yMax;
+            void main() {
+
+            float maxX = max(abs(xMin), abs(xMax));
+            float maxY = max(abs(yMin), abs(yMax));
+            float midX = (xMax + xMin) / 2.0;
+            float midY = (yMax + yMin) / 2.0;
+            float length = max(maxX, maxY);
+            float leftmostX = ((maxX + xMin - midX) / (maxX * 2.0));
+            float rightmostX = ((maxX + xMax - midX) / (maxX * 2.0));
+            float leftmostY = ((maxY + yMin - midY) / (maxY * 2.0));
+            float rightmostY = ((maxY + yMax - midY) / (maxY * 2.0));
+            
+            float maxLeftMost = max(abs(leftmostX), abs(leftmostY));
+            float maxRightMost = max(abs(rightmostX), abs(rightmostY));
+            float outerXY = 1.0 + (1.0 - max(abs(maxLeftMost), abs(maxRightMost)));
+            float tempx = (a_Position.x - midX) * outerXY;
+            float tempy = (a_Position.y - midY) * outerXY;
+            float testx = (((a_Position.x) - midX) / (length * 2.0));
+            float testy = (((a_Position.y) - midY) / (length * 2.0));
+            testx = testx * outerXY;
+            testy = testy * outerXY;
+            float x = ((length + tempx) / (length* 2.0));
+            float y = ((length + tempy) / (length* 2.0));
+            
+            vec3 newPos = vec3(x * 800.0, y * 800.0 , a_Position.z);
+
+            vec3 res = vec3(800.0 ,800.0, u_ZValue);
+            vec3 zeroToOne = newPos / res;
+            vec3 zeroToTwo = zeroToOne * 2.0;
+            vec3 clipSpace = zeroToTwo - 1.0;
+            gl_Position = u_xformMatrix * vec4(clipSpace* vec3(1, 1,-1),1);
+            v_Color = a_Color; 
+            //gl_Position = translation + vec4(newPos,1.0);
+            gl_PointSize = 4.0;
+            }                
+        </script>
+
+    <script id="shader-fs" type="x-shader/x-fragment">
+            precision mediump float;
+            varying vec4 v_Color;
+            void main() {
+                gl_FragColor = v_Color;            
+            }
+    </script>
+
+    <script>
+        var gl;
+        var canvas;
+        var shaderProgram;
+        var polyMesh =null;
+        var renderData;
+        var CurrentMesh=null;
+        var g_MvpMatrix = new Matrix4();
+        var Sx , Sy , Sz ;
+		var xformMatrix = new Matrix4([
+			Sx, 0.0, 0.0, 0.0,
+			0.0, Sy, 1.0, 0.0,
+			0.0, 1.0, Sz, 0.0,
+			0.0, 0.0, 0.0, 1.0
+		]);
+
+        var R1;
+        var G1;
+        var B1;
+
+        var R2;
+        var G2;
+        var B2;
+        
+        var R3;
+        var G3;
+        var B3;
+        var OldRotateValue = 0;
+
+        function setupShaders() {
+            var vertexShader = loadShaderFromDOM("shader-vs");
+            var fragmentShader = loadShaderFromDOM("shader-fs");
+
+            shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                alert("Failed to setup shaders");
+            }
+
+            gl.useProgram(shaderProgram);
+            var resolutionLocation = gl.getUniformLocation(shaderProgram, "u_resolution");
+            gl.uniform2f(resolutionLocation, canvas.width, canvas.height);
+            var zValue = gl.getUniformLocation(shaderProgram, "u_ZValue");
+            gl.uniform1f(zValue, canvas.width);
+        }
+
+        function findPoly(file) {
+            return file.name.split('.').pop() === "poly";
+        }
+
+        function findNode(file) {
+            return file.name.split('.').pop() === "node";
+        }
+
+        function initArrayBuffer(gl, bindingPoint, data) {
+            //http://internetexception.com/post/2013/02/25/Line-in-WebGL-and-why-you-gonna-do-this-on-your-own.aspx
+            var buffer = gl.createBuffer();
+            gl.bindBuffer(bindingPoint, buffer);
+            gl.bufferData(bindingPoint, data, gl.STATIC_DRAW);
+            return buffer;
+        }
+
+        function zoom() {
+            let zoomFactor = parseFloat(document.getElementById("zoom").value);
+            Sx = zoomFactor / 100;
+            Sy = zoomFactor / 100;
+            Sz = 1.0;
+            var temp = new Matrix4(xformMatrix);
+			xformMatrix = xformMatrix.setScale(Sx,Sy,Sz);
+            var u_xformMatrix = gl.getUniformLocation(shaderProgram, 'u_xformMatrix');
+            gl.uniformMatrix4fv(u_xformMatrix, false, xformMatrix.elements);
+            DrawScene(polyMesh, CurrentMesh);
+        }
+
+        function triangulate() {
+            CurrentMesh = new Mesh(polyMesh);
+            CurrentMesh.triangulate(polyMesh);
+            DrawScene(polyMesh, CurrentMesh);
+        }
+
+        function handleMeshUpdate(mesh) {
+            // Render mesh
+            renderData.SetMesh(mesh);
+        }
+
+        function backColor() {
+            backCl = getBackColor('backcolorpicker');
+            gl.clearColor(backCl[0], backCl[1], backCl[2], 1.0);
+            DrawScene(polyMesh, CurrentMesh);
+        }
+
+        function pointAColor() {
+            cl = getBackColor('pointacolorpicker');
+            R1= cl[0];
+            G1= cl[1];
+            B1= cl[2];
+            DrawScene(polyMesh, CurrentMesh);            
+        }
+
+        function pointBColor() {
+            cl = getBackColor('pointbcolorpicker');
+            R2= cl[0];
+            G2= cl[1];
+            B2= cl[2];
+            DrawScene(polyMesh, CurrentMesh);            
+        }
+
+        function pointCColor() {
+            cl = getBackColor('pointccolorpicker');
+            R3= cl[0];
+            G3= cl[1];
+            B3= cl[2];
+            DrawScene(polyMesh, CurrentMesh);            
+        }
+
+        function getBackColor(elementId) {
+            var color = hex2num(document.getElementById(elementId).value);
+            return getRGB(color);
+        }
+
+        function rotate() {
+            
+            var rotateValue = parseFloat(document.getElementById("rotate").value);
+            var step =  OldRotateValue -rotateValue;
+            OldRotateValue = rotateValue;
+            xformMatrix = xformMatrix.rotate(step, 0.0, 0.0, 1.0); // Rotation around x-axis
+            var u_xformMatrix = gl.getUniformLocation(shaderProgram, 'u_xformMatrix');
+            gl.uniformMatrix4fv(u_xformMatrix, false, xformMatrix.elements);
+            DrawScene(polyMesh, CurrentMesh);    
+        }
+        function DrawScene(inputGeometry, mesh) {
+            gl.viewport(0, 0, canvas.width, canvas.height);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+            if (inputGeometry === null || inputGeometry.Vertices === null) {
+                return;
+            }
+         
+            let vertices = new Float32Array(inputGeometry.Vertices.length * 3);
+            let indices = new Uint16Array(inputGeometry.Segments.length * 2);
+            let vertexIndices = new Uint16Array(inputGeometry.Vertices.length);
+            let boundingTriangles = new Float32Array(9);
+            let boundingTriangleIndices = new Uint16Array(3);
+            let trianglePoints;
+            let triangleIndices;
+            let triangleColors;
+
+            let vertexColor = new Array(0);
+            let segmentColor = new Array(0);
+            let triangleColor = new Array(0);
+
+            let boundingBox = inputGeometry.BoundingBox;
+            let transVertices = inputGeometry.Vertices;
+            var xMin = gl.getUniformLocation(shaderProgram, "xMin");
+            gl.uniform1f(xMin, boundingBox.XMin);
+            var xMax = gl.getUniformLocation(shaderProgram, "xMax");
+            gl.uniform1f(xMax, boundingBox.XMax);
+            var yMin = gl.getUniformLocation(shaderProgram, "yMin");
+            gl.uniform1f(yMin, boundingBox.YMin);
+            var yMax = gl.getUniformLocation(shaderProgram, "yMax");
+            gl.uniform1f(yMax, boundingBox.YMax);
+                
+            var j = 0;
+            k = 0;
+            
+            for (var i = 0; i < transVertices.length; i++) {
+                vertices[3 * j] = transVertices[i].X;
+                vertices[3 * j + 1] = transVertices[i].Y;
+                vertices[3 * j + 2] = parseFloat(0.0);
+                j = j + 1;
+                vertexIndices[k] = k;
+                vertexColor = vertexColor.concat([0.0, 1.0, 0.0]);
+                segmentColor = segmentColor.concat([0.0, 0.0, 1.0]);
+                k++;
+            }
+            j = 0;
+
+            for (var i = 0; i < inputGeometry.Segments.length; i++) {
+                indices[j] = (inputGeometry.Segments[i].P0);
+                indices[j + 1] = (inputGeometry.Segments[i].P1);
+                j = j + 2;
+            }
+
+            j = 0;
+            if (mesh !== null && mesh.Triangles !== null) {
+                //Mesh Triangles
+                trianglePoints = new Float32Array(mesh.Triangles.size * 9);
+                triangleIndices = new Uint16Array(mesh.Triangles.size * 3);
+                triangleColors = new Float32Array(mesh.Triangles.size * 9);
+
+                let i = 0;
+                let j = 0;
+                let k = 0;
+                
+                for (var tri of mesh.Triangles.values()) {
+                    trianglePoints[i] = tri.Vertices[0].X;
+                    trianglePoints[i + 1] = tri.Vertices[0].Y;
+                    trianglePoints[i + 2] = parseFloat(0.0);
+
+                    trianglePoints[i + 3] = tri.Vertices[1].X;
+                    trianglePoints[i + 4] = tri.Vertices[1].Y;
+                    trianglePoints[i + 5] = parseFloat(0.0);
+
+                    trianglePoints[i + 6] = tri.Vertices[2].X;
+                    trianglePoints[i + 7] = tri.Vertices[2].Y;
+                    trianglePoints[i + 8] = parseFloat(0.0);
+
+                    triangleColors[i] = R1;
+                    triangleColors[i + 1] = G1;
+                    triangleColors[i + 2] = B1;
+
+                    triangleColors[i + 3] = R2;
+                    triangleColors[i + 4] = G2;
+                    triangleColors[i + 5] = B2;
+
+                    triangleColors[i + 6] = R3;
+                    triangleColors[i + 7] = G3;
+                    triangleColors[i + 8] = B3;
+
+                    triangleIndices[j] = k;
+                    triangleIndices[j + 1] = k + 1;
+                    triangleIndices[j + 2] = k + 2;
+                    i = i + 9;
+                    j = j + 3;
+                    k = k + 3;
+                }
+
+                triangleColor = triangleColor.concat([1.0, 0.0, 0.0]);
+                triangleColor = triangleColor.concat([1.0, 0.0, 0.0]);
+                triangleColor = triangleColor.concat([1.0, 0.0, 0.0]);
+            }
+
+            //Vertices
+            initArrayBuffer(gl, gl.ARRAY_BUFFER, vertices);
+            initArrayBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, vertexIndices);
+            var a_Position = gl.getAttribLocation(shaderProgram, "a_Position");
+            gl.enableVertexAttribArray(a_Position);
+            gl.vertexAttribPointer(a_Position, 3, gl.FLOAT, false, 0, 0);
+            gl.drawElements(gl.POINTS, vertexIndices.length, gl.UNSIGNED_SHORT, 0);
+
+            //Segment Color
+            var segmentColorBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, segmentColorBuffer);
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(segmentColor), gl.STATIC_DRAW);
+            var a_Color = gl.getAttribLocation(shaderProgram, "a_Color");
+            gl.vertexAttribPointer(a_Color, 3, gl.FLOAT, false, 0, 0);
+            gl.enableVertexAttribArray(a_Color);
+
+            //Segments
+            initArrayBuffer(gl, gl.ARRAY_BUFFER, vertices);
+            initArrayBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, indices);
+            a_Position = gl.getAttribLocation(shaderProgram, "a_Position");
+            gl.enableVertexAttribArray(a_Position);
+            gl.vertexAttribPointer(a_Position, 3, gl.FLOAT, false, 0, 0);
+            gl.drawElements(gl.LINES, indices.length, gl.UNSIGNED_SHORT, 0);
+
+            if (mesh !== null) {
+                gl.enableVertexAttribArray(a_Position);
+
+                gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+                var triangleBuffer = gl.createBuffer();
+                var triangleIndexBuffer = gl.createBuffer();
+
+                gl.bindBuffer(gl.ARRAY_BUFFER, triangleBuffer);
+                gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, triangleIndexBuffer);
+
+                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(trianglePoints), gl.STATIC_DRAW);
+                gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(triangleIndices), gl.STATIC_DRAW);
+
+                var a_Position = gl.getAttribLocation(shaderProgram, "a_Position");
+                gl.vertexAttribPointer(a_Position, 3, gl.FLOAT, false, 0, 0);
+
+                var colorBuffer = gl.createBuffer();
+                gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+                gl.bufferData(gl.ARRAY_BUFFER, triangleColors, gl.STATIC_DRAW);
+               
+                colorBuffer.itemSize = 3;
+                colorBuffer.numberOfItems = 3;
+                var a_Color = gl.getAttribLocation(shaderProgram, "a_Color");
+                gl.enableVertexAttribArray(a_Color);
+                gl.vertexAttribPointer(a_Color, colorBuffer.itemSize, gl.FLOAT, true, 0, 0);
+
+                gl.drawElements(gl.TRIANGLES, triangleIndices.length, gl.UNSIGNED_SHORT, 0);
+            }
+        }
+
+        function startup() {
+            Sx = 1.0;
+            Sy = 1.0;
+            Sz = 1.0;
+            canvas = document.getElementById("myGLCanvas");
+            gl = WebGLDebugUtils.makeDebugContext(createGLContext(canvas));
+            renderData = new RenderData();
+            setupShaders();
+
+            backCl = getBackColor('backcolorpicker');
+            gl.clearColor(backCl[0], backCl[1], backCl[2], 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+            cl = getBackColor('pointacolorpicker');
+            R1= cl[0];
+            G1= cl[1];
+            B1= cl[2];
+            cl = getBackColor('pointbcolorpicker');
+            R2= cl[0];
+            G2= cl[1];
+            B2= cl[2];
+            cl = getBackColor('pointccolorpicker');
+            R3= cl[0];
+            G3= cl[1];
+            B3= cl[2];
+
+            var Tx = -1, Ty = 0.85, Tz = 0.0;
+            
+            var translation = gl.getUniformLocation(shaderProgram, 'translation');
+            gl.uniform4f(translation, Tx, Ty, Tz, 0.0);
+            var u_xformMatrix = gl.getUniformLocation(shaderProgram, 'u_xformMatrix');
+            gl.uniformMatrix4fv(u_xformMatrix, false, xformMatrix.elements);
+
+            var polyFile = null;
+            var nodeFile = null;
+            var control = document.getElementById("files");
+            control.addEventListener("change", function (event) {
+                var i = 0,
+                    files = control.files,
+                    len = files.length;
+
+                for (; i < len; i++) {
+                    if (files[i].name.split('.').pop() === "poly") {
+                        polyFile = files[i];
+                    }
+                    if (files[i].name.split('.').pop() === "node") {
+                        nodeFile = files[i];
+                    }
+                }
+
+                if (polyFile !== null) {
+                    let reader = new MeshFileReader();
+                    reader.readPolyFile(polyFile, nodeFile, function (inputGeometry) {
+                        polyMesh = inputGeometry;
+                        renderData.setInputGeometry(inputGeometry);
+                        DrawScene(inputGeometry, null);
+                    });
+                } else {
+                    let reader = new MeshFileReader();
+                    reader.readNodeFile(nodeFile, function (inputGeometry) {
+
+                        let vertices = new Float32Array(inputGeometry.Vertices.length * 3);
+                        let indices = new Uint16Array(inputGeometry.Vertices.length);
+
+                        var j = 0;
+                        var k = 0;
+                        for (var i = 0; i < inputGeometry.Vertices.length; i++) {
+                            vertices[j] = inputGeometry.Vertices[i].X;
+                            vertices[j + 1] = inputGeometry.Vertices[i].Y;
+                            vertices[j + 2] = parseFloat(0.0);
+                            j = j + 3;
+                            indices[k] = k;
+                            k = k + 1;
+                        }
+                        var vbuf = initArrayBuffer(gl, gl.ARRAY_BUFFER, vertices);
+                        var ibuf = initArrayBuffer(gl, gl.ELEMENT_ARRAY_BUFFER, indices);
+                        var a_Position = gl.getAttribLocation(shaderProgram, "a_Position");
+                        gl.enableVertexAttribArray(a_Position);
+                        gl.vertexAttribPointer(a_Position, 3, gl.FLOAT, false, 0, 0);
+                        gl.drawElements(gl.POINTS, indices.length, gl.UNSIGNED_SHORT, 0);
+                    });
+                }
+
+            }, false);
+        }
+    </script>
+</head>
+
+<body onload="startup();">
+    <div id="content">
+        <canvas id="myGLCanvas" style="border:1px solid #000000;" width="800" height="800">
+            Please use a browser that supports "canvas"
+        </canvas>
+    </div>
+    <div id="footer1" >
+        <fieldset id="File" class="File">
+            <legend>File</legend>
+            <input type="file" id="files" multiple> <br><br>
+            <button type="button" onclick="triangulate()">Triangulate</button>
+        </fieldset>
+    </div>
+    <div id="footer2" >
+        <fieldset id="Zoom" class="Zoom">
+            <legend>Zoom</legend>
+            <input id="zoom" type="range" step="0.5" name="trianglex" min="-500" max="500" value="100.0" onchange="zoom();">
+        </fieldset>
+    </div>
+    <div id="footer3" >
+        <fieldset id="Color" class="Color">
+            <legend>Color</legend>
+            <legend>Background</legend>
+            <input type="color" id ="backcolorpicker" name="backcolorpicker" onchange="backColor();" value="#FFFFFF">
+            <legend>Point A</legend>
+            <input type="color" id ="pointacolorpicker" name="pointacolorpicker" onchange="pointAColor();" value="#00FF00">
+            <legend>Point B</legend>
+            <input type="color" id ="pointbcolorpicker" name="pointbcolorpicker" onchange="pointBColor();" value="#FF7F00">
+            <legend>Point C</legend>
+            <input type="color" id ="pointccolorpicker" name="pointccolorpicker" onchange="pointCColor();" value="#FF1400">
+        </fieldset>
+    </div>
+    <div id="footer4" >
+        <fieldset id="Rotation" class="Rotation">
+            <legend>Rotation</legend>
+            x:<input id = "rotate" type="range" name="rotate" min="-180" max="180.0" value="0.0" step="1" onchange="rotate();"><br>
+        </fieldset>
+    </div>
+</body>
+<script>
+(function () {
+    var textFile = null,
+      makeTextFile = function (text) {
+        var data = new Blob([text], {type: 'text/plain'});
+    
+        // If we are replacing a previously generated file we need to
+        // manually revoke the object URL to avoid memory leaks.
+        if (textFile !== null) {
+          window.URL.revokeObjectURL(textFile);
+        }
+        textFile = window.URL.createObjectURL(data);
+        return textFile;
+      };
+    })();
+</script>   
+</html>
